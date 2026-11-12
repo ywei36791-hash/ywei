@@ -4,7 +4,8 @@
  *       立即调用签到接口 (cookie 抓到瞬间就用, 不受 20 分钟过期影响)
  * 触发: 打开顺丰 App 进入会员/积分相关页面即可 (由 .sgmodule 的 http-request 规则触发, 请勿手动运行)
  * 通信范围: 仅 mcs-mimp-web.sf-express.com (顺丰官方域名)
- * 增强: 每次结果会存档 (最近14次) 并写入 Surge 日志 (搜 [顺丰签到]);
+ * 增强: 通知正文带逐条明细, 长按通知展开即可看全 (和规则详情面板同款看法);
+ *       每次结果会存档 (最近14次) 并写入 Surge 日志 (搜 [顺丰签到]);
  *       当天只要成功签到一次, 当天内后续触发直接放行不再抓取, 次日自动恢复
  */
 
@@ -204,19 +205,20 @@ function main() {
       }
     }
     // 签到后继续做每日任务
-    doTasks(cookie, function (taskMsg) {
+    doTasks(cookie, function (taskMsg, taskDetail) {
       // 结果存档 (最近14次) + 写一条固定格式日志, 方便在 Surge 日志里搜 [顺丰签到]
       let hist = [];
       try { hist = JSON.parse($persistentStore.read(HIST_KEY) || "[]"); } catch (e) { hist = []; }
       const prev = hist.length ? hist[0] : null;
       const line = signMsg + " | " + taskMsg;
       console.log("[顺丰签到] " + localToday() + " " + line);
+      if (taskDetail) console.log("[顺丰签到] 明细\n" + taskDetail);
       hist.unshift({ d: localToday(), r: line });
       if (hist.length > 14) hist = hist.slice(0, 14);
       $persistentStore.write(JSON.stringify(hist), HIST_KEY);
       // 签到成功 -> 落今日完成标记, 当天不再抓取
       if (signOk) $persistentStore.write(localToday(), DONE_KEY);
-      notify("顺丰积分 ✅", signMsg, taskMsg + (prev ? "\n上次(" + prev.d + "): " + prev.r : ""));
+      notify("顺丰积分 ✅", signMsg, taskMsg + (taskDetail ? "\n" + taskDetail : "") + (prev ? "\n上次(" + prev.d + "): " + prev.r : ""));
       done();
     });
   });
@@ -252,7 +254,9 @@ function doTasks(cookie, finalCb) {
     // "去完成" 表示未做; 其他(已完成/去领取等)视为已处理
     const todo = tasks.filter(t => t.taskCode && t.buttonContent === "去完成");
     const finished = total - todo.length;
-    const doneNames = [];
+    const beforeNames = tasks.filter(t => !(t.taskCode && t.buttonContent === "去完成")).map(t => t.title || "").filter(Boolean);
+    const okLines = [];
+    const failLines = [];
 
     let done2 = 0;
     function step(i) {
@@ -268,13 +272,18 @@ function doTasks(cookie, finalCb) {
             const m = rr.errorMessage || "";
             rmsg = (m.indexOf("无可领") !== -1 || m.indexOf("已领") !== -1) ? "暂无可领奖励" : ("领奖:" + m);
           }
-          const detail = doneNames.length ? ("完成:" + doneNames.join("、")) : "";
-          finalCb(`任务 ${finished + done2}/${total}; ${rmsg}${detail ? "; " + detail : ""}`);
+          const blocks = [];
+          if (okLines.length) blocks.push("本次完成:\n" + okLines.join("\n"));
+          if (failLines.length) blocks.push("未能完成:\n" + failLines.join("\n"));
+          if (beforeNames.length) blocks.push("此前已完成(" + beforeNames.length + "): " + beforeNames.join("、"));
+          finalCb(`任务 ${finished + done2}/${total}; ${rmsg}`, blocks.join("\n"));
         });
         return;
       }
       postJson(cookie, FINISH, { taskCode: todo[i].taskCode }, function (fr) {
-        if (fr && fr.success) { done2++; doneNames.push(todo[i].title || ""); }
+        const nm = todo[i].title || todo[i].taskCode;
+        if (fr && fr.success) { done2++; okLines.push("✓ " + nm); }
+        else { failLines.push("✗ " + nm + (fr && fr.errorMessage ? " (" + fr.errorMessage + ")" : "")); }
         setTimeout(function () { step(i + 1); }, 1500);
       });
     }
