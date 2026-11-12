@@ -1,0 +1,10 @@
+#!name=顺丰签到
+#!desc=打开顺丰App进入会员/积分页时自动触发：现抓新鲜cookie完成签到+全部每日任务+领奖励，绕过cookie约20分钟过期。移植自 Loon 插件 sf-checkin-loon（作者 panjin9395），脚本逻辑保持原样，仅与顺丰官方域名通信。需先把配套脚本 sf_checkin_surge.js 传到你自己的 GitHub 仓库（下方 script-path 已按你的仓库地址填好）。
+#!author=panjin9395（原作）/ Muse（Surge 移植）
+#!homepage=https://github.com/panjin9395/sf-checkin-loon
+
+[Script]
+顺丰签到 = type=http-request, pattern=^https:\/\/mcs-mimp-web\.sf-express\.com\/mcs-mimp\/commonPost\/.*(queryPointTaskAndSignFromES|personalInfoNew|automaticSignFetchPackage), script-path=https://raw.githubusercontent.com/ywei36791-hash/ywei/main/sf_checkin_surge.js, requires-body=true, timeout=60
+
+[MITM]
+hostname = %APPEND% mcs-mimp-web.sf-express.com
