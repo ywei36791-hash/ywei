@@ -4,6 +4,8 @@
  *       立即调用签到接口 (cookie 抓到瞬间就用, 不受 20 分钟过期影响)
  * 触发: 打开顺丰 App 进入会员/积分相关页面即可 (由 .sgmodule 的 http-request 规则触发, 请勿手动运行)
  * 通信范围: 仅 mcs-mimp-web.sf-express.com (顺丰官方域名)
+ * 增强: 每次结果会存档 (最近14次) 并写入 Surge 日志 (搜 [顺丰签到]);
+ *       当天只要成功签到一次, 当天内后续触发直接放行不再抓取, 次日自动恢复
  */
 
 // ===== MD5 (精简实现) =====
@@ -65,6 +67,15 @@ const UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/6
 // ---- 防重复: 每天只签一次 ----
 const TODAY = new Date().toISOString().slice(0, 10);
 const LASTRUN_KEY = "sf_lastrun_ts";
+const DONE_KEY = "sf_done_date";
+const HIST_KEY = "sf_history";
+
+function localToday() {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return d.getFullYear() + "-" + m + "-" + day;
+}
 
 function genSignature(ts) {
   return md5(`wwesldfs29aniversaryvdld29&timestamp=${ts}&sysCode=${SYS_CODE}`);
@@ -148,6 +159,9 @@ function main() {
     done(); return;
   }
 
+  // 今日已成功签到 -> 关闭今日抓取, 直接放行原请求 (次日自动恢复)
+  if ($persistentStore.read(DONE_KEY) === localToday()) { done(); return; }
+
   // 限流: 距上次执行不足 10 分钟则跳过 (防止 App 内翻页反复触发刷屏)
   // 注意: 不再"整天跳过", 这样可随时手动重测; 签到/任务接口对重复调用安全
   const lastTs = parseInt($persistentStore.read(LASTRUN_KEY) || "0", 10);
@@ -161,6 +175,7 @@ function main() {
     "Accept": "application/json, text/plain, */*",
   });
 
+  let signOk = false;
   $httpClient.post({
     url: BASE + urlPath,
     headers: headers,
@@ -173,6 +188,7 @@ function main() {
       try {
         const j = JSON.parse(data);
         if (j.success) {
+          signOk = true;
           const obj = j.obj || {};
           const days = obj.countDay || 0;
           const list = obj.integralTaskSignPackageVOList || [];
@@ -189,7 +205,18 @@ function main() {
     }
     // 签到后继续做每日任务
     doTasks(cookie, function (taskMsg) {
-      notify("顺丰积分 ✅", signMsg, taskMsg);
+      // 结果存档 (最近14次) + 写一条固定格式日志, 方便在 Surge 日志里搜 [顺丰签到]
+      let hist = [];
+      try { hist = JSON.parse($persistentStore.read(HIST_KEY) || "[]"); } catch (e) { hist = []; }
+      const prev = hist.length ? hist[0] : null;
+      const line = signMsg + " | " + taskMsg;
+      console.log("[顺丰签到] " + localToday() + " " + line);
+      hist.unshift({ d: localToday(), r: line });
+      if (hist.length > 14) hist = hist.slice(0, 14);
+      $persistentStore.write(JSON.stringify(hist), HIST_KEY);
+      // 签到成功 -> 落今日完成标记, 当天不再抓取
+      if (signOk) $persistentStore.write(localToday(), DONE_KEY);
+      notify("顺丰积分 ✅", signMsg, taskMsg + (prev ? "\n上次(" + prev.d + "): " + prev.r : ""));
       done();
     });
   });
